@@ -14,8 +14,16 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+import java.io.FileWriter;
+import java.io.IOException;
 
 @Slf4j
 @Component
@@ -93,6 +101,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 case "GET_MOVIE_BUTTON" -> getMovieCommandReceived(chatId);
                 case "HELP_BUTTON" -> helpCommandReceived(chatId);
                 case "BACK_BUTTON" -> startCommandReceived(chatId, update.getCallbackQuery().getMessage().getChat().getFirstName());
+                case "GET_MSG_BUTTON" -> mainParse();
             }
 
         }
@@ -103,19 +112,30 @@ public class TelegramBot extends TelegramLongPollingBot {
 
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
-        message.setText("Выберите дату");
+        message.setText("Выберите способ получения списка фильмов");
 
         InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
         List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
         List<InlineKeyboardButton> row1 = new ArrayList<>();
+        List<InlineKeyboardButton> row2 = new ArrayList<>();
 
         var backButton = new InlineKeyboardButton();
         backButton.setText("\uD83D\uDD19 Вернуться");
         backButton.setCallbackData("BACK_BUTTON");
 
 
+        var getDocButton = new InlineKeyboardButton();
+        getDocButton.setText("\uD83D\uDCDD Получить файл");
+        getDocButton.setCallbackData("GET_DOC_BUTTON");
+
+        var getMsgButton = new InlineKeyboardButton();
+        getMsgButton.setText("\uD83D\uDCE9 Получить сообщение");
+        getMsgButton.setCallbackData("GET_MSG_BUTTON");
 
         row1.add(backButton);
+        row2.add(getMsgButton);
+        row2.add(getDocButton);
+        rowsInline.add(row2);
         rowsInline.add(row1);
         inlineKeyboardMarkup.setKeyboard(rowsInline);
         message.setReplyMarkup(inlineKeyboardMarkup);
@@ -197,6 +217,59 @@ public class TelegramBot extends TelegramLongPollingBot {
             execute(message);
         } catch (TelegramApiException e) {
 
+        }
+    }
+
+    private void mainParse(){
+        try {
+            // Подключаемся к сайту
+            Document doc = connectWithRetry("https://ekt.kinoafisha.info/movies/?date=2024-05-05");
+
+            // Находим все элементы с классом "blocktitle"
+            Elements newsBlocks = doc.getElementsByClass("movieItem_title");
+
+            // Записываем полученные данные в файл
+            writeToFile(newsBlocks, "movies.txt");
+
+            // Проходим по всем найденным элементам
+            for (Element newsBlock : newsBlocks) {
+                // Извлекаем текст заголовка новости
+                String title = newsBlock.text();
+
+                // Выводим заголовок новости
+                log.info("Название фильма: " + title);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Функция для подключения к сайту с возможностью переподключения в случае ошибки
+    private static Document connectWithRetry(String url) throws IOException {
+        int maxRetries = 3;
+        int retries = 0;
+        while (true) {
+            try {
+                return Jsoup.connect(url).get();
+            } catch (IOException e) {
+                retries++;
+                if (retries == maxRetries) {
+                    throw e;
+                }
+                System.out.println("Ошибка при подключении к сайту. Попытка переподключения...");
+            }
+        }
+    }
+
+    // Функция для записи данных в файл
+    private static void writeToFile(Elements data, String fileName) {
+        try (FileWriter fileWriter = new FileWriter(fileName)) {
+            for (Element element : data) {
+                fileWriter.write("Название новости: " + element.text() + "\n");
+            }
+            System.out.println("Данные успешно записаны в файл " + fileName);
+        } catch (IOException e) {
+            System.out.println("Ошибка при записи данных в файл: " + e.getMessage());
         }
     }
 }
