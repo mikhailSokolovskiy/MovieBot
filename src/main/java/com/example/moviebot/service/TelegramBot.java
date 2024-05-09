@@ -9,6 +9,7 @@ import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
@@ -17,8 +18,10 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
+import java.net.URL;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -28,7 +31,6 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.io.FileWriter;
 import java.io.IOException;
 
 @Slf4j
@@ -49,7 +51,6 @@ public class TelegramBot extends TelegramLongPollingBot {
             Напишите /help для получения информации по использованию бота.
                         
             """;
-
 
     public TelegramBot(BotConfig config) {
         this.config = config;
@@ -73,6 +74,8 @@ public class TelegramBot extends TelegramLongPollingBot {
     public String getBotToken() {
         return config.getToken();
     }
+
+    int movieId = 0;
 
     @Override
     public void onUpdateReceived(Update update) {
@@ -109,8 +112,18 @@ public class TelegramBot extends TelegramLongPollingBot {
                 case "HELP_BUTTON" -> helpCommandReceived(chatId);
                 case "BACK_BUTTON" ->
                         startCommandReceived(chatId, update.getCallbackQuery().getMessage().getChat().getFirstName());
-                case "GET_MSG_BUTTON" -> mainParse(chatId);
+                case "GET_MSG_BUTTON" -> sendMovieMessage(chatId,0);
                 case "GET_DOC_BUTTON" -> sendMovieFile(chatId);
+                case "GET_NEXT_MOVIE_BUTTON" -> {
+                    movieId += 1;
+                    if (movieId > movieInfo.size() - 1) movieId = 0;
+                    sendMovieMessage(chatId, movieId);
+                }
+                case "GET_PREV_MOVIE_BUTTON" -> {
+                    movieId -=1;
+                    if (movieId < 0) movieId = movieInfo.size() - 1;
+                    sendMovieMessage(chatId, movieId);
+                }
             }
 
         }
@@ -218,7 +231,8 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void sendDocument(long chatid, InputFile sendFile){
+
+    private void sendDocument(long chatid, InputFile sendFile) {
         SendDocument document = new SendDocument();
         document.setChatId(String.valueOf(chatid));
         document.setDocument(sendFile);
@@ -231,13 +245,14 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void sendMovieFile(long chatId){
+    private void sendMovieFile(long chatId) {
         InputFile file = new InputFile();
         File myFile = new File("movies.txt");
         file.setMedia(myFile);
         sendDocument(chatId, file);
     }
-{}    private void sendMessage(long chatId, String textToSend) {
+
+    private void sendMessage(long chatId, String textToSend) {
 
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
@@ -250,31 +265,86 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
+    private void sendPicture(long chatId, String photoLink, String caption) {
+        SendPhoto photo = new SendPhoto();
+        photo.setChatId(String.valueOf(chatId));
+        photo.setCaption(caption);
+        InputStream stream = null;
+        try {
+            stream = new URL(photoLink).openStream();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        photo.setPhoto(new InputFile(stream, photoLink));
+
+        InlineKeyboardMarkup inlineKeyboardMarkup = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
+        List<InlineKeyboardButton> row1 = new ArrayList<>();
+        List<InlineKeyboardButton> row2 = new ArrayList<>();
+
+        var prevButton = new InlineKeyboardButton();
+        prevButton.setText("◀\uFE0F Предыдущий фильм");
+        prevButton.setCallbackData("GET_PREV_MOVIE_BUTTON");
+
+        var nextButton = new InlineKeyboardButton();
+        nextButton.setText("Следующий фильм ▶\uFE0F");
+        nextButton.setCallbackData("GET_NEXT_MOVIE_BUTTON");
+
+        var backButton = new InlineKeyboardButton();
+        backButton.setText("\uD83D\uDD19 Вернутся");
+        backButton.setCallbackData("GET_MOVIE_BUTTON");
+
+        row1.add(prevButton);
+        row1.add(nextButton);
+        row2.add(backButton);
+        rowsInline.add(row1);
+        rowsInline.add(row2);
+
+        inlineKeyboardMarkup.setKeyboard(rowsInline);
+        photo.setReplyMarkup(inlineKeyboardMarkup);
+
+        try {
+            execute(photo);
+        } catch (TelegramApiException e) {
+
+        }
+    }
+
+    private void sendMovieMessage(long chatId, int movieId) {
+        int index = movieInfo.get(movieId).indexOf("\n");
+        sendPicture(chatId, movieInfo.get(movieId).substring(0, index), movieInfo.get(movieId).substring(index + 1));
+    }
+
     List<String> movieInfo = new ArrayList<>();
 
     private void mainParse(long chatId) {
         try {
+            movieInfo.clear();
+            LocalDate today = LocalDate.now();
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+            String formattedDate = today.format(formatter);
+            System.out.println(formattedDate);
             // Подключаемся к сайту
-            Document doc = connectWithRetry("https://ekt.kinoafisha.info/movies/?date=2024-05-09");
+            Document doc = connectWithRetry("https://ekt.kinoafisha.info/movies/?date=" + formattedDate);
 
             // Находим все элементы с классом "blocktitle"
-            Elements titleBlock = doc.getElementsByClass("movieItem_info");
+            Elements titleBlock = doc.getElementsByClass("movieList_item movieItem  movieItem-grid grid_cell4 ");
             // Записываем полученные данные в файл
             writeToFile(titleBlock, "movies.txt");
             int i = 0;
             // Проходим по всем найденным элементам
             for (Element Block : titleBlock) {
                 // Извлекаем текст заголовка новости
+                String image = Block.getElementsByClass("picture_image").attr("data-picture") + "\n";
                 String title = "Название фильма: " + Block.getElementsByClass("movieItem_title").text() + ". \n";
                 String link = Block.getElementsByClass("movieItem_title").attr("href");
                 String subTitle = "Карткое описание: " + Block.getElementsByClass("movieItem_subtitle").text() + ". \n";
                 String details = "Жанр, год выпуска, страна издатель: " + Block.getElementsByClass("movieItem_details").text() + ". \n";
                 // Выводим заголовок новости
-                movieInfo.add(title + subTitle + details + link);
+                movieInfo.add(image + title + subTitle + details + link);
                 i++;
             }
 
-            System.out.println(movieInfo);
         } catch (IOException e) {
             e.printStackTrace();
         }
