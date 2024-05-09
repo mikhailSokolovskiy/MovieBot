@@ -2,11 +2,14 @@ package com.example.moviebot.service;
 
 import com.example.moviebot.config.BotConfig;
 import com.vdurmont.emoji.EmojiParser;
+import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
+import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault;
@@ -14,14 +17,17 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+
 import java.io.FileWriter;
 import java.io.IOException;
 
@@ -43,6 +49,7 @@ public class TelegramBot extends TelegramLongPollingBot {
             Напишите /help для получения информации по использованию бота.
                         
             """;
+
 
     public TelegramBot(BotConfig config) {
         this.config = config;
@@ -85,7 +92,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                     helpCommandReceived(chatId);
                     break;
                 case "/getmovie":
-
+                    getMovieCommandReceived(chatId);
                     break;
                 default:
 
@@ -100,15 +107,19 @@ public class TelegramBot extends TelegramLongPollingBot {
             switch (callbackData) {
                 case "GET_MOVIE_BUTTON" -> getMovieCommandReceived(chatId);
                 case "HELP_BUTTON" -> helpCommandReceived(chatId);
-                case "BACK_BUTTON" -> startCommandReceived(chatId, update.getCallbackQuery().getMessage().getChat().getFirstName());
-                case "GET_MSG_BUTTON" -> mainParse();
+                case "BACK_BUTTON" ->
+                        startCommandReceived(chatId, update.getCallbackQuery().getMessage().getChat().getFirstName());
+                case "GET_MSG_BUTTON" -> mainParse(chatId);
+                case "GET_DOC_BUTTON" -> sendMovieFile(chatId);
             }
 
         }
 
     }
 
-    private void getMovieCommandReceived(long chatId){
+    private void getMovieCommandReceived(long chatId) {
+
+        mainParse(chatId);
 
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
@@ -147,7 +158,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void helpCommandReceived(long chatId){
+    private void helpCommandReceived(long chatId) {
 
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
@@ -207,7 +218,26 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void sendMessage(long chatId, String textToSend) {
+    private void sendDocument(long chatid, InputFile sendFile){
+        SendDocument document = new SendDocument();
+        document.setChatId(String.valueOf(chatid));
+        document.setDocument(sendFile);
+        document.setCaption("Список фильмов на сегодня. \uD83D\uDCDD");
+        try {
+            execute(document);
+            System.out.println("file is sending");
+        } catch (TelegramApiException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+
+    private void sendMovieFile(long chatId){
+        InputFile file = new InputFile();
+        File myFile = new File("movies.txt");
+        file.setMedia(myFile);
+        sendDocument(chatId, file);
+    }
+{}    private void sendMessage(long chatId, String textToSend) {
 
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
@@ -220,25 +250,31 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void mainParse(){
+    List<String> movieInfo = new ArrayList<>();
+
+    private void mainParse(long chatId) {
         try {
             // Подключаемся к сайту
-            Document doc = connectWithRetry("https://ekt.kinoafisha.info/movies/?date=2024-05-05");
+            Document doc = connectWithRetry("https://ekt.kinoafisha.info/movies/?date=2024-05-09");
 
             // Находим все элементы с классом "blocktitle"
-            Elements newsBlocks = doc.getElementsByClass("movieItem_title");
-
+            Elements titleBlock = doc.getElementsByClass("movieItem_info");
             // Записываем полученные данные в файл
-            writeToFile(newsBlocks, "movies.txt");
-
+            writeToFile(titleBlock, "movies.txt");
+            int i = 0;
             // Проходим по всем найденным элементам
-            for (Element newsBlock : newsBlocks) {
+            for (Element Block : titleBlock) {
                 // Извлекаем текст заголовка новости
-                String title = newsBlock.text();
-
+                String title = "Название фильма: " + Block.getElementsByClass("movieItem_title").text() + ". \n";
+                String link = Block.getElementsByClass("movieItem_title").attr("href");
+                String subTitle = "Карткое описание: " + Block.getElementsByClass("movieItem_subtitle").text() + ". \n";
+                String details = "Жанр, год выпуска, страна издатель: " + Block.getElementsByClass("movieItem_details").text() + ". \n";
                 // Выводим заголовок новости
-                log.info("Название фильма: " + title);
+                movieInfo.add(title + subTitle + details + link);
+                i++;
             }
+
+            System.out.println(movieInfo);
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -265,7 +301,13 @@ public class TelegramBot extends TelegramLongPollingBot {
     private static void writeToFile(Elements data, String fileName) {
         try (FileWriter fileWriter = new FileWriter(fileName)) {
             for (Element element : data) {
-                fileWriter.write("Название новости: " + element.text() + "\n");
+                // Извлекаем текст заголовка новости
+                String title = "Название фильма: " + element.getElementsByClass("movieItem_title").text() + ". \n";
+                String link = element.getElementsByClass("movieItem_title").attr("href") + "\r\n";
+                String subTitle = "Карткое описание: " + element.getElementsByClass("movieItem_subtitle").text() + ". \n";
+                String details = "Жанр, год выпуска, страна издатель: " + element.getElementsByClass("movieItem_details").text() + ". \n";
+                // Выводим заголовок новости
+                fileWriter.write(title + subTitle + details + link + "\n");
             }
             System.out.println("Данные успешно записаны в файл " + fileName);
         } catch (IOException e) {
